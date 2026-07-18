@@ -1,0 +1,7 @@
+COMPANY FREIGHT PRICING POLICY - 2026
+Standard Base Rate: 50 INR per kilometer of driving distance.
+Expedited Base Rate: 75 INR per kilometer of driving distance. 
+Pallet Handling Fee: 500 INR per pallet.
+Heavy Weight Surcharge: Any shipment exceeding 4,000 kg incurs a flat 2,500 INR heavy transport fee.
+Fragile Goods Surcharge: 15% added to the final total cost (calculated after all other fees and distance rates are applied).
+Turnaround time: Standard shipping takes 3 days. Expedited shipping takes 1 day.
