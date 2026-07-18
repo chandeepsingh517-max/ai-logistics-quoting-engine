@@ -1,3 +1,4 @@
 .env
 __pycache__/
 logistics_db/
+env/
