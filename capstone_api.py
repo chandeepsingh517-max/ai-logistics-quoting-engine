@@ -5,9 +5,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
 from langchain_chroma import Chroma
-from langchain_community.embeddings import SentenceTransformerEmbeddings
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # --- BUG FIX FOR CREWAI ---
 import crewai.llms.cache as _crewai_cache
@@ -21,7 +21,10 @@ search_tool = SerperDevTool()
 
 app = FastAPI(title="Logistics Quoting API")
 
-embedding_function = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+embedding_function = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001", 
+    google_api_key=os.getenv("GOOGLE_API_KEY")
+)
 logistics_db = Chroma(persist_directory="./logistics_db", embedding_function=embedding_function)
 
 class FreightEmail(BaseModel):
