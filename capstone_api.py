@@ -7,7 +7,7 @@ from groq import Groq
 from langchain_chroma import Chroma
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_cohere import CohereEmbeddings
 
 # --- BUG FIX FOR CREWAI ---
 import crewai.llms.cache as _crewai_cache
@@ -21,9 +21,9 @@ search_tool = SerperDevTool()
 
 app = FastAPI(title="Logistics Quoting API")
 
-embedding_function = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001", 
-    google_api_key=os.getenv("GOOGLE_API_KEY")
+embedding_function = CohereEmbeddings(
+    model="embed-english-v3.0",
+    cohere_api_key=os.getenv("COHERE_API_KEY")
 )
 logistics_db = Chroma(persist_directory="./logistics_db", embedding_function=embedding_function)
 

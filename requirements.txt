@@ -1,4 +1,4 @@
-langchain-google-genai
+langchain-cohere
 fastapi
 uvicorn
 groq
