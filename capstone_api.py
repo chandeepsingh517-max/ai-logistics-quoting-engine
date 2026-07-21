@@ -3,11 +3,9 @@ import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from groq import Groq
-from langchain_chroma import Chroma
+from openai import OpenAI
 from crewai import Agent, Task, Crew, LLM
-from crewai_tools import SerperDevTool
-from langchain_cohere import CohereEmbeddings
+from crewai.tools import tool
 
 # --- BUG FIX FOR CREWAI ---
 import crewai.llms.cache as _crewai_cache
@@ -15,98 +13,148 @@ _crewai_cache.mark_cache_breakpoint = lambda msg: msg
 
 # --- SETUP & GLOBAL VARIABLES ---
 load_dotenv()
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-llm = LLM(model="groq/llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"), temperature=0.1)
-search_tool = SerperDevTool()
 
-app = FastAPI(title="Logistics Quoting API")
+# Universal Client & LLM for both Routing and CrewAI
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-embedding_function = CohereEmbeddings(
-    model="embed-english-v3.0",
-    cohere_api_key=os.getenv("COHERE_API_KEY")
+llm = LLM(
+    model="gpt-4o-mini",
+    api_key=os.getenv("OPENAI_API_KEY"),
+    temperature=0.0
 )
-logistics_db = Chroma(persist_directory="./logistics_db", embedding_function=embedding_function)
 
-class FreightEmail(BaseModel):
+app = FastAPI(title="Logistics Autonomous Inbox API")
+
+class IncomingEmail(BaseModel):
     email_text: str
 
-@app.post("/api/quote-freight")
-def generate_freight_quote(request: FreightEmail):
+# --- THE PYTHON CALCULATOR TOOL ---
+@tool("Freight Calculator")
+def calculate_freight(weight_kg: int, distance_km: int, is_fragile: bool, timeline: str) -> str:
+    """Use this to calculate ALL freight costs. Pass weight, distance, fragile status, and timeline."""
+    base_rate = 0.1 
+    total = weight_kg * distance_km * base_rate
     
-    # 1. PHASE 1: DATA EXTRACTION (Groq)
-    print("Extracting email data...")
-    system_prompt = """
-    You are a precise data extraction API for a logistics company.
-    Analyze the inbound email and extract the freight details into strict JSON format.
-    CRITICAL RULES: Output ONLY raw JSON. No markdown ticks, no conversational text.
-    REQUIRED SCHEMA:
-    {
-        "origin_city": "city, state",
-        "destination_city": "city, state",
-        "total_pallets": integer,
-        "total_weight_kg": integer,
-        "is_fragile": boolean,
-        "timeline": "Expedited" or "Standard"
-    }
-    """
-    extraction_response = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+    if is_fragile:
+        total += 1000
+    if timeline.lower() == "expedited":
+        total += 2000
+        
+    return f"The final exact cost is ₹{total}"
+
+# --- HELPER FUNCTION: THE ROUTER ---
+def classify_intent(email_body: str) -> str:
+    """Fast, ultra-cheap LLM call to classify the email intent."""
+    print("🚦 Routing Email...")
+    system_prompt = (
+        "You are an email routing bot. Read the email and output EXACTLY ONE WORD from this list: "
+        "'QUOTE' (if they want a price/estimate), "
+        "'TRACKING' (if they are asking where their shipment is), "
+        "'SUPPORT' (for anything else)."
+    )
+    
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini", 
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request.email_text}
+            {"role": "user", "content": email_body}
         ],
-        temperature=0.0
+        temperature=0.0,
+        max_tokens=10
     )
-    extracted_json = extraction_response.choices[0].message.content
-
-    # 2. PHASE 2: POLICY RETRIEVAL (RAG)
-    print("Retrieving pricing matrix...")
-    docs = logistics_db.similarity_search("freight pricing base rate heavy pallet fragile surcharge", k=1)
-    pricing_rules = docs[0].page_content if docs else "No rules found."
-
-    # 3. PHASE 3: CREWAI AUTONOMOUS WORKFORCE
-    print("Deploying AI Workforce...")
     
-    estimator = Agent(
-        role='Senior Freight Estimator',
-        goal='Calculate accurate freight costs using company rules and live driving distances.',
-        backstory='You are a mathematical genius in logistics. You use the search tool to find driving distances in kilometers, then strictly apply company pricing rules to calculate totals.',
-        tools=[search_tool],
-        verbose=True,
-        llm=llm
-    )
+    intent = response.choices[0].message.content.strip().upper()
+    return intent
 
-    sales_exec = Agent(
-        role='Logistics Sales Executive',
-        goal='Draft professional quote emails to clients.',
-        backstory='You write clean, highly professional B2B sales emails. You take the math from the Estimator and format it nicely for the client.',
-        verbose=True,
-        llm=llm
-    )
+# --- MAIN ENDPOINT ---
+@app.post("/api/process-email")
+def process_incoming_email(request: IncomingEmail):
+    
+    # STEP 1: ROUTE THE TRAFFIC
+    intent = classify_intent(request.email_text)
+    print(f"📩 Intent Detected: {intent}")
+    
+    # -----------------------------------------
+    # ROUTE A: NON-QUOTE EMAILS (Bypass CrewAI to save tokens)
+    # -----------------------------------------
+    if intent == "TRACKING":
+        return {
+            "status": "success", 
+            "intent": intent, 
+            "action": "Triggered Tracking Lookup Webhook",
+            "message": "This would trigger a fast DB lookup for the client's tracking number."
+        }
+        
+    elif intent == "SUPPORT":
+        return {
+            "status": "success", 
+            "intent": intent, 
+            "action": "Forwarded to Human Agent",
+            "message": "This email was flagged for a human to read. AI bypassed."
+        }
 
-    task_calculate = Task(
-        description=f"""
-        1. Look at this extracted shipment data: {extracted_json}
-        2. Use the search tool to find the live driving distance in kilometers between the origin and destination.
-        3. Use these exact company rules to calculate the final price in INR: {pricing_rules}
-        Break down your math step-by-step so the sales exec can see the fees.
-        """,
-        expected_output="A step-by-step mathematical breakdown of the final price in INR.",
-        agent=estimator
-    )
+    # -----------------------------------------
+    # ROUTE B: QUOTE EMAILS (Deploy the Heavyweight CrewAI Pipeline)
+    # -----------------------------------------
+    elif intent == "QUOTE":
+        print("⚙️ Deploying Estimator Pipeline...")
+        
+        # 1. Extract JSON
+        extract_prompt = "Extract to strict JSON: origin_city, destination_city, total_pallets, total_weight_kg, is_fragile, timeline. Output raw JSON only."
+        extraction_response = openai_client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[
+                {"role": "system", "content": extract_prompt},
+                {"role": "user", "content": request.email_text}
+            ],
+            temperature=0.0
+        )
+        
+        raw_content = extraction_response.choices[0].message.content.strip()
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:-3].strip()
+        
+        extracted_json = raw_content
 
-    task_draft_email = Task(
-        description="Write a professional email to the client providing the quote. Include the breakdown of costs (Base rate, pallet fees, surcharges if applicable). Be polite and urgent.",
-        expected_output="A finalized professional email string ready to send.",
-        agent=sales_exec
-    )
+        # 2. Deploy CrewAI Workforce
+        estimator = Agent(
+            role='Estimator',
+            goal='Calculate the freight price using the Freight Calculator tool.',
+            backstory='You are a precise estimator. You ALWAYS use the Freight Calculator tool.',
+            tools=[calculate_freight],
+            verbose=False, 
+            max_iter=2,    
+            llm=llm 
+        )
 
-    crew = Crew(agents=[estimator, sales_exec], tasks=[task_calculate, task_draft_email], verbose=True)
-    final_email = crew.kickoff()
+        sales = Agent(
+            role='Sales',
+            goal='Draft a short quote email using ONLY the exact final price provided.',
+            backstory='You are a strict, no-nonsense sales executive. You never invent fees, breakdowns, or numbers. You only quote the single final price given to you by the Estimator.',
+            verbose=False, 
+            max_iter=2,
+            llm=llm 
+        )
 
-    # 4. RETURN TO CLIENT
-    return {
-        "status": "success", 
-        "extracted_data": json.loads(extracted_json), # Converts string to actual JSON object
-        "final_quote_email": str(final_email)
-    }
+        task_calc = Task(
+            description=f"Data: {extracted_json}. Assume the driving distance is exactly 250 km. MANDATORY: Pass the weight, distance (250), fragile status, and timeline into the 'Freight Calculator' tool.",
+            expected_output="The final price.",
+            agent=estimator
+        )
+
+        task_email = Task(
+            description="Write a very short client email providing the final price quote. CRITICAL INSTRUCTION: You MUST use the exact final cost string provided by the Estimator. Do NOT break the cost down. Do NOT invent pallet fees, base rates, or surcharges. Just provide the final total.",
+            expected_output="A brief finalized email containing the exact calculated price and no other numbers.",
+            agent=sales
+        )
+
+        crew = Crew(agents=[estimator, sales], tasks=[task_calc, task_email], verbose=False)
+        final_email = crew.kickoff()
+
+        # 3. Return the fully processed quote
+        return {
+            "status": "success", 
+            "intent": intent,
+            "extracted_data": json.loads(extracted_json), 
+            "final_quote_email": str(final_email)
+        }
