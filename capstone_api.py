@@ -122,16 +122,16 @@ def process_incoming_email(request: IncomingEmail):
             goal='Calculate the freight price using the Freight Calculator tool.',
             backstory='You are a precise estimator. You ALWAYS use the Freight Calculator tool.',
             tools=[calculate_freight],
-            verbose=False, 
+            verbose=True,  # <--- VERBOSE TURNED ON
             max_iter=2,    
             llm=llm 
         )
 
         sales = Agent(
-            role='Sales',
-            goal='Draft a short quote email using ONLY the exact final price provided.',
-            backstory='You are a strict, no-nonsense sales executive. You never invent fees, breakdowns, or numbers. You only quote the single final price given to you by the Estimator.',
-            verbose=False, 
+            role='Client Success Manager',
+            goal='Draft a highly professional, structured, and detailed freight quote email.',
+            backstory='You are a Senior Client Success Manager at FastFreight Logistics. You write emails that are polite, detailed, and reassuring. You always restate the client\'s request details (origin, destination, weight) to show they were understood. You seamlessly weave the final price into the email and always offer clear next steps. You never use bracketed placeholders.',
+            verbose=True, 
             max_iter=2,
             llm=llm 
         )
@@ -143,12 +143,30 @@ def process_incoming_email(request: IncomingEmail):
         )
 
         task_email = Task(
-            description="Write a very short client email providing the final price quote. CRITICAL INSTRUCTION: You MUST use the exact final cost string provided by the Estimator. Do NOT break the cost down. Do NOT invent pallet fees, base rates, or surcharges. Just provide the final total.",
-            expected_output="A brief finalized email containing the exact calculated price and no other numbers.",
+            description=f'''
+            Write a professional, multi-paragraph client email providing the final price quote.
+            
+            CRITICAL INSTRUCTIONS:
+            1. GREETING: Extract the sender's first name from the original email text below and use it (e.g., "Hi [Their Name],").
+            2. ACKNOWLEDGE: Write a sentence thanking them for the inquiry and naturally restating their route and weight using this data: {extracted_json}.
+            3. QUOTE: Clearly state the exact final cost string provided by the Estimator. Do not invent any hidden fees.
+            4. NEXT STEPS: Add a professional closing sentence telling them how to proceed (e.g., "If you would like to lock in this rate and dispatch a driver, please reply to confirm.")
+            5. FORMATTING: Use line breaks to separate paragraphs so it is easy to read. DO NOT output any bracketed placeholders anywhere.
+            6. SIGNATURE: Sign the bottom exactly like this:
+               
+               Best regards,
+               Automated Dispatch Team
+               FastFreight Logistics
+            
+            Original Email Text to analyze for the sender's name:
+            "{request.email_text}"
+            ''',
+            expected_output="A well-structured, multi-paragraph email restating the shipment details, providing the quote, and outlining next steps.",
             agent=sales
         )
 
-        crew = Crew(agents=[estimator, sales], tasks=[task_calc, task_email], verbose=False)
+        # <--- VERBOSE TURNED ON FOR THE ENTIRE CREW
+        crew = Crew(agents=[estimator, sales], tasks=[task_calc, task_email], verbose=True) 
         final_email = crew.kickoff()
 
         # 3. Return the fully processed quote
